@@ -1,0 +1,16 @@
+venv
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+config/settings.json
+
+uploads/*.jsonl
+uploads/.file_hashes.json
+uploads/.tracking/
+
+.resources.json
+
+logs/
+temp/

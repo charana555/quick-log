@@ -1,0 +1,11 @@
+{
+  "features": {
+    "log_analytics_elk": {
+      "enabled": true,
+      "config": {
+        "upload_dir": "uploads",
+        "max_file_size_mb": 500
+      }
+    }
+  }
+}

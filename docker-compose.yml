@@ -1,0 +1,108 @@
+services:
+  # Elasticsearch - Log storage and indexing
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.15
+    container_name: quick-log-elasticsearch
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      CLI_JAVA_OPTS: "-XX:+IgnoreUnrecognizedVMOptions"
+      ingest.geoip.downloader.enabled: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+      - ./elk/es_template.json:/usr/share/elasticsearch/config/templates/athena-logs-template.json
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Kibana - Log visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.15
+    container_name: quick-log-kibana
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=512"
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+    volumes:
+      - ./elk/kibana.yml:/usr/share/kibana/config/kibana.yml
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -I http://localhost:5601/api/status | grep -q 'HTTP/1.1 200 OK'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  # Logstash - Log processing pipeline
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.17.15
+    container_name: quick-log-logstash
+    command: logstash -w 1 -b 50 --pipeline.batch.delay 50
+    environment:
+      LS_JAVA_OPTS: "-Xms1536m -Xmx1536m"
+      QUEUE_TYPE: "persisted"
+      QUEUE_MAX_BYTES: "1gb"
+      XPACK_MONITORING_ENABLED: "false"
+      PIPELINE_WORKERS: "1"
+      PIPELINE_BATCH_SIZE: "50"
+      PIPELINE_BATCH_DELAY: "50"
+      HTTP_HOST: "0.0.0.0"
+    volumes:
+      - ./uploads:/usr/share/logstash/external_logs
+      - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+      - logstash_data:/usr/share/logstash/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9600/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Streamlit App - Main application with uploader
+  quick-log:
+    container_name: quick-log
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - ES_URL=http://elasticsearch:9200
+      - UPLOAD_DIR=/app/uploads
+      - QUICK_LOG_HOST=${QUICK_LOG_HOST:-localhost}
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      logstash:
+        condition: service_started
+
+volumes:
+  es_data:
+  logstash_data:

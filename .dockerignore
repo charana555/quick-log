@@ -1,0 +1,38 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.env
+
+# Streamlit
+.streamlit/credentials.toml
+
+# Local Data
+uploads/*
+!uploads/.gitkeep
+
+# Resource info
+.resources.json
+
+# Releases
+releases/
+*.zip
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
