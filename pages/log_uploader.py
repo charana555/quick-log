@@ -7,12 +7,12 @@ from datetime import datetime
 from utils.uploader_helper import (
     compute_file_hash,
     preprocess_file_streaming,
+    bulk_index_to_es,
     detect_format,
     load_hash_db,
     save_hash_db,
     get_es_count,
     delete_uploaded_file,
-    clear_es_index_only,
     full_reset
 )
 from utils.validation import require_feature
@@ -25,7 +25,6 @@ from utils.styles import (
 )
 from utils.urls import (
     ELASTICSEARCH_INTERNAL,
-    LOGSTASH_INTERNAL,
     KIBANA_INTERNAL,
     get_kibana_external,
 )
@@ -43,7 +42,6 @@ UPLOAD_DIR = log_config.get('upload_dir', 'uploads')
 MAX_FILE_SIZE_MB = log_config.get('max_file_size_mb', 500)
 ES_URL = ELASTICSEARCH_INTERNAL
 KIBANA_URL = get_kibana_external()
-LS_URL = LOGSTASH_INTERNAL
 KB_URL_INT = KIBANA_INTERNAL
 
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
@@ -57,14 +55,11 @@ LOGS_METADATA = load_hash_db(UPLOAD_DIR)
 # ──────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### :material/monitoring: Stack Health")
-    health_cols = st.columns(3)
+    health_cols = st.columns(2)
     with health_cols[0]:
         es_status = check_service_health(ES_URL, "/_cluster/health")
         render_status_dot("ES", es_status)
     with health_cols[1]:
-        ls_status = check_service_health(LS_URL)
-        render_status_dot("LS", ls_status)
-    with health_cols[2]:
         kb_status = check_service_health(KB_URL_INT, "/api/status")
         render_status_dot("KB", kb_status)
 
@@ -135,10 +130,15 @@ if uploaded_files:
                 status_text.text("Removed old version")
 
             try:
-                status_text.text("Converting to NDJSON for Logstash...")
+                status_text.text("Converting to NDJSON...")
                 lines_written, lines_skipped = preprocess_file_streaming(
                     uploaded_file, file_path, uploaded_file.name, progress_bar, status_text
                 )
+
+                progress_bar.progress(0.5, "Converting complete. Indexing to Elasticsearch...")
+                status_text.text("Indexing to Elasticsearch...")
+
+                indexed, failed = bulk_index_to_es(ES_URL, file_path, progress_bar, status_text)
 
                 progress_bar.progress(1.0, "Complete!")
 
@@ -148,13 +148,17 @@ if uploaded_files:
                     'size': uploaded_file.size,
                     'output_file': f"{base_name}.jsonl",
                     'entries_count': lines_written,
-                    'skipped_count': lines_skipped
+                    'skipped_count': lines_skipped,
+                    'indexed_count': indexed,
+                    'index_failed_count': failed
                 }
                 save_hash_db(UPLOAD_DIR, LOGS_METADATA)
 
-                msg = f":material/check_circle: Processed: **{lines_written:,}** log entries written to `{base_name}.jsonl`"
+                msg = f":material/check_circle: **{indexed:,}** entries indexed to Elasticsearch"
+                if failed > 0:
+                    msg += f" ({failed:,} failed)"
                 if lines_skipped > 0:
-                    msg += f" ({lines_skipped:,} lines skipped)"
+                    msg += f" | {lines_skipped:,} lines skipped during parsing"
                 st.success(msg)
 
             except Exception as e:
@@ -213,45 +217,28 @@ else:
 st.divider()
 
 # ──────────────────────────────────────────────────────────────
-# Danger Zone — Guarded
+# Danger Zone — Full Reset Only
 # ──────────────────────────────────────────────────────────────
 st.subheader(":material/warning: Danger Zone")
 
-with st.expander("Clear Data Options", expanded=False):
+with st.expander("Reset Options", expanded=False):
     st.markdown('<div class="danger-zone">', unsafe_allow_html=True)
 
     confirm = st.checkbox(
-        "I understand this will permanently delete data",
+        "I understand this will permanently delete all data",
         key="danger_confirm"
     )
 
     if confirm:
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if st.button(":material/delete_forever: Clear ES Index Only", type="secondary"):
-                if clear_es_index_only(ES_URL):
-                    st.session_state.processed_files = set()
-                    st.toast("Elasticsearch index cleared", icon=":material/check_circle:")
-                    st.rerun()
-                else:
-                    st.error("Failed to clear data from Elasticsearch")
-
-        with col2:
-            if st.button(":material/restart_alt: Full Reset", type="primary",
-                         help="Clears ES index, tracking files, all .jsonl files, and restarts Logstash"):
-                es_cleared, logstash_restarted = full_reset(ES_URL, UPLOAD_DIR)
-                if es_cleared:
-                    st.session_state.processed_files = set()
-                    if logstash_restarted:
-                        st.toast("Full reset complete — Logstash restarted", icon=":material/check_circle:")
-                    else:
-                        st.toast("Data cleared — Logstash restart failed", icon=":material/warning:")
-                        st.info("Run `./manage_stack.sh restart` from the host to restart Logstash.")
-                    st.rerun()
-                else:
-                    st.error("Failed to clear data")
+        if st.button(":material/delete_forever: Full Reset", type="primary",
+                     help="Clears ES index, all .jsonl files, and upload tracking"):
+            if full_reset(ES_URL, UPLOAD_DIR):
+                st.session_state.processed_files = set()
+                st.toast("Full reset complete", icon=":material/check_circle:")
+                st.rerun()
+            else:
+                st.error("Failed to reset. Check if Elasticsearch is reachable.")
     else:
-        st.caption("Check the box above to enable destructive actions.")
+        st.caption("Check the box above to enable reset.")
 
     st.markdown('</div>', unsafe_allow_html=True)

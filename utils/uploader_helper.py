@@ -1,8 +1,8 @@
 """
 Uploader helper module - Core logic for file upload and processing.
-Extracted from the original log-viewer uploader service.
 Supports CSV, TXT, and JSON file formats with automatic detection.
-All formats are converted to NDJSON (.jsonl) for Logstash ingestion.
+Files are converted to NDJSON (.jsonl) for archive and indexed
+directly to Elasticsearch via the Bulk API.
 """
 
 import os
@@ -12,6 +12,8 @@ from datetime import datetime
 
 
 SUPPORTED_EXTENSIONS = {"csv", "txt", "json"}
+ES_INDEX = "athena-logs"
+BULK_BATCH_SIZE = 5000
 
 
 def detect_format(filename):
@@ -180,8 +182,7 @@ def _process_json_file(input_file, output_path, progress_bar=None, status_text=N
 
 def preprocess_file_streaming(input_file, output_path, filename, progress_bar=None, status_text=None):
     """
-    Preprocess log file and convert to NDJSON format for Logstash.
-    Supports CSV, TXT, and JSON formats detected by file extension.
+    Preprocess log file and convert to NDJSON format.
     Returns tuple of (lines_written, lines_skipped).
     """
     fmt = detect_format(filename)
@@ -190,6 +191,74 @@ def preprocess_file_streaming(input_file, output_path, filename, progress_bar=No
         return _process_json_file(input_file, output_path, progress_bar, status_text)
 
     return _process_csv_lines(input_file, output_path, progress_bar, status_text)
+
+
+def _send_bulk_batch(es_url, index, entries):
+    """Send a batch of entries to Elasticsearch via Bulk API."""
+    import requests
+    bulk_body = ""
+    for entry in entries:
+        bulk_body += json.dumps({"index": {"_index": index}}) + "\n"
+        bulk_body += entry + "\n"
+
+    try:
+        response = requests.post(
+            f"{es_url}/_bulk",
+            headers={"Content-Type": "application/x-ndjson"},
+            data=bulk_body.encode('utf-8'),
+            timeout=120
+        )
+        if response.status_code == 200:
+            result = response.json()
+            items = result.get('items', [])
+            success = sum(1 for item in items if item.get('index', {}).get('status') in [200, 201])
+            failed = sum(1 for item in items if item.get('index', {}).get('status') not in [200, 201])
+            return success, failed
+        return 0, len(entries)
+    except Exception:
+        return 0, len(entries)
+
+
+def bulk_index_to_es(es_url, jsonl_path, progress_bar=None, status_text=None):
+    """Read a .jsonl file and index all entries to Elasticsearch via Bulk API."""
+    total_lines = 0
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for _ in f:
+            total_lines += 1
+
+    total_indexed = 0
+    total_failed = 0
+    batch = []
+    lines_read = 0
+
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            batch.append(line)
+            lines_read += 1
+
+            if len(batch) >= BULK_BATCH_SIZE:
+                if status_text:
+                    status_text.text(f"Indexing to Elasticsearch... {lines_read:,}/{total_lines:,} entries")
+                if progress_bar and total_lines > 0:
+                    progress_bar.progress(lines_read / total_lines, f"Indexing... {lines_read:,}/{total_lines:,}")
+
+                success, failed = _send_bulk_batch(es_url, ES_INDEX, batch)
+                total_indexed += success
+                total_failed += failed
+                batch = []
+
+        if batch:
+            if status_text:
+                status_text.text(f"Indexing final batch... {lines_read:,}/{total_lines:,} entries")
+            success, failed = _send_bulk_batch(es_url, ES_INDEX, batch)
+            total_indexed += success
+            total_failed += failed
+
+    return total_indexed, total_failed
 
 
 def load_hash_db(upload_dir):
@@ -218,7 +287,7 @@ def get_es_count(es_url):
     """Get document count from Elasticsearch index."""
     import requests
     try:
-        response = requests.get(f"{es_url}/athena-logs/_count")
+        response = requests.get(f"{es_url}/{ES_INDEX}/_count")
         if response.status_code == 200:
             return response.json().get("count", 0)
     except:
@@ -232,85 +301,28 @@ def delete_uploaded_file(upload_dir, filename, hash_db=None):
     if os.path.exists(file_path):
         try:
             os.remove(file_path)
-        except Exception as e:
+        except Exception:
             return False
-            
-        # Also remove from metadata if it's a .jsonl file
+
         if hash_db:
-            base_name = os.path.splitext(filename)[0]
             for orig_name, meta in list(hash_db.items()):
                 if meta.get('output_file') == filename:
                     del hash_db[orig_name]
                     save_hash_db(upload_dir, hash_db)
                     break
 
-        # Note: We can't clear Logstash sincedb from inside the container without docker.
-        # The file will be re-processed if uploaded again only after:
-        # 1. Logstash container is restarted, OR
-        # 2. sincedb files are cleared manually via manage_stack.sh on host
         return True
     return False
 
 
-def _docker_client():
-    try:
-        import docker
-        return docker.from_env()
-    except Exception:
-        return None
-
-
-def stop_logstash():
-    try:
-        client = _docker_client()
-        if not client:
-            return False
-        container = client.containers.get("quick-log-logstash")
-        container.stop(timeout=15)
-        import time
-        time.sleep(2)
-        return True
-    except Exception:
-        return False
-
-
-def start_logstash():
-    try:
-        client = _docker_client()
-        if not client:
-            return False
-        container = client.containers.get("quick-log-logstash")
-        container.start()
-        return True
-    except Exception:
-        return False
-
-
-def clear_es_index_only(es_url):
-    """Clear only the Elasticsearch index. Preserves tracking files and uploads."""
-    import requests
-    try:
-        response = requests.delete(f"{es_url}/athena-logs")
-        return response.status_code in [200, 404]
-    except Exception:
-        return False
-
-
 def full_reset(es_url, upload_dir):
-    """Full reset: stop Logstash, clear ES index + tracking + files, then start Logstash."""
+    """Full reset: clear ES index, hash DB, and all .jsonl files."""
     import requests
-    import time
 
-    logstash_stopped = stop_logstash()
-
-    if logstash_stopped:
-        time.sleep(1)
-
-    for name in ["sincedb", "completed_files.log"]:
-        path = os.path.join(upload_dir, ".tracking", name)
-        if os.path.exists(path):
+    for f in os.listdir(upload_dir):
+        if f.endswith('.jsonl'):
             try:
-                os.remove(path)
+                os.remove(os.path.join(upload_dir, f))
             except Exception:
                 pass
 
@@ -321,20 +333,10 @@ def full_reset(es_url, upload_dir):
         except Exception:
             pass
 
-    for f in os.listdir(upload_dir):
-        if f.endswith('.jsonl'):
-            try:
-                os.remove(os.path.join(upload_dir, f))
-            except Exception:
-                pass
-
-    es_cleared = False
     try:
-        response = requests.delete(f"{es_url}/athena-logs")
+        response = requests.delete(f"{es_url}/{ES_INDEX}")
         es_cleared = response.status_code in [200, 404]
     except Exception:
-        pass
+        es_cleared = False
 
-    logstash_started = start_logstash()
-
-    return es_cleared, logstash_started
+    return es_cleared

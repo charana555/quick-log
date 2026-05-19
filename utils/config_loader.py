@@ -4,9 +4,8 @@ import os
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'settings.json')
 
 URL_KEYS = {
-    "elasticsearch_url", "kibana_url", "logstash_url",
+    "elasticsearch_url", "kibana_url",
     "elasticsearch_url_internal", "elasticsearch_url_external",
-    "logstash_url_internal", "logstash_url_external",
     "kibana_url_internal", "kibana_url_external",
 }
 
@@ -23,7 +22,6 @@ def _migrate_config(config):
     old_to_new = {
         "elasticsearch_url": ("elasticsearch_url_internal", "elasticsearch_url_external"),
         "kibana_url": ("kibana_url_internal", "kibana_url_external"),
-        "logstash_url": ("logstash_url_internal", "logstash_url_external"),
     }
 
     for old_key, (int_key, ext_key) in old_to_new.items():

@@ -45,38 +45,6 @@ services:
       timeout: 5s
       retries: 20
 
-  # Logstash - Log processing pipeline
-  logstash:
-    image: docker.elastic.co/logstash/logstash:7.17.15
-    container_name: quick-log-logstash
-    command: logstash -w 1 -b 50 --pipeline.batch.delay 50
-    environment:
-      LS_JAVA_OPTS: "-Xms1536m -Xmx1536m"
-      QUEUE_TYPE: "persisted"
-      QUEUE_MAX_BYTES: "1gb"
-      XPACK_MONITORING_ENABLED: "false"
-      PIPELINE_WORKERS: "1"
-      PIPELINE_BATCH_SIZE: "50"
-      PIPELINE_BATCH_DELAY: "50"
-      HTTP_HOST: "0.0.0.0"
-    volumes:
-      - ./uploads:/usr/share/logstash/external_logs
-      - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
-      - logstash_data:/usr/share/logstash/data
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s -f http://localhost:9600/ || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
   # Streamlit App - Main application with uploader
   quick-log:
     container_name: quick-log
@@ -86,7 +54,6 @@ services:
     volumes:
       - .:/app
       - ./uploads:/app/uploads
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - STREAMLIT_SERVER_PORT=8501
       - STREAMLIT_SERVER_ADDRESS=0.0.0.0
@@ -100,9 +67,6 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-      logstash:
-        condition: service_started
 
 volumes:
   es_data:
-  logstash_data:

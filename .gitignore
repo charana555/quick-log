@@ -8,7 +8,6 @@ config/settings.json
 
 uploads/*.jsonl
 uploads/.file_hashes.json
-uploads/.tracking/
 
 .resources.json
 
