@@ -49,7 +49,107 @@ def truncate_large_fields(entry, max_value_length=50000):
     return entry
 
 
+def _normalize_value(parsed):
+    """Normalize 'value' inside parsed message to always be a string.
+    Avoids ES mapping conflicts from mixed dict/int/str types."""
+    if not isinstance(parsed, dict) or 'value' not in parsed:
+        return parsed
+
+    parsed = parsed.copy()
+    val = parsed['value']
+    if isinstance(val, str):
+        return parsed
+    if isinstance(val, dict):
+        parsed['value'] = json.dumps(val)
+    else:
+        parsed['value'] = str(val)
+    return parsed
+
+
+def _normalize_timestamp(ts_str):
+    """Normalize timestamp to ISO 8601 with millisecond precision.
+    Handles nanosecond timestamps like '2026-05-05T08:15:06.858331364Z'
+    by truncating fractional seconds to milliseconds."""
+    if not isinstance(ts_str, str):
+        return None
+
+    ts_str = ts_str.strip()
+    if not ts_str:
+        return None
+
+    try:
+        from datetime import datetime, timezone
+        import re
+
+        # Split into date-time and fractional+offset parts
+        # Match patterns like: 2026-05-05T08:15:06.858331364Z or 2026-05-05T08:15:06.858+05:30
+        m = re.match(
+            r'(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$',
+            ts_str
+        )
+        if m:
+            base = m.group(1).replace(' ', 'T')
+            frac = m.group(2) or ''
+            tz = m.group(3) or 'Z'
+
+            # Truncate fractional seconds to 3 digits (milliseconds)
+            if frac:
+                if len(frac) > 3:
+                    frac = frac[:3]
+                elif len(frac) < 3:
+                    frac = frac.ljust(3, '0')
+                return f'{base}.{frac}Z' if tz in ('Z', '') else f'{base}.{frac}{tz}'
+            else:
+                return f'{base}Z' if tz in ('Z', '') else f'{base}{tz}'
+
+    except Exception:
+        pass
+
+    return None
+
+
+def _enrich_entry(entry):
+    """If entry has a 'message' field containing a JSON string, parse it
+    and store under 'parsed_message'. Original 'message' string is preserved.
+    'value' inside parsed_message is normalized to a string to avoid ES
+    mapping conflicts from mixed dict/int/str types."""
+    if not isinstance(entry, dict):
+        return entry
+
+    message = entry.get('message')
+    if not isinstance(message, str):
+        return entry
+
+    try:
+        parsed = json.loads(message)
+    except (json.JSONDecodeError, ValueError):
+        return entry
+
+    if not isinstance(parsed, dict):
+        return entry
+
+    entry = entry.copy()
+    entry['parsed_message'] = _normalize_value(parsed)
+
+    ts = None
+    pm_ts = parsed.get('timestamp')
+    if pm_ts:
+        ts = _normalize_timestamp(pm_ts)
+    if not ts:
+        outer_ts = entry.get('timestamp')
+        if outer_ts:
+            ts = _normalize_timestamp(outer_ts)
+    if not ts:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.') + f'{datetime.now(timezone.utc).microsecond // 1000:03d}Z'
+
+    entry['@timestamp'] = ts
+
+    return entry
+
+
 def _write_entry(entry, out):
+    entry = _enrich_entry(entry)
     entry = truncate_large_fields(entry)
     out.write(json.dumps(entry) + '\n')
 
