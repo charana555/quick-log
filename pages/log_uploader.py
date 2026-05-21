@@ -54,6 +54,11 @@ LOGS_METADATA = load_hash_db(UPLOAD_DIR)
 # Sidebar: Stack Health + Stats + Kibana Link
 # ──────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
     st.markdown("### :material/monitoring: Stack Health")
     health_cols = st.columns(2)
     with health_cols[0]:
@@ -222,8 +227,6 @@ st.divider()
 st.subheader(":material/warning: Danger Zone")
 
 with st.expander("Reset Options", expanded=False):
-    st.markdown('<div class="danger-zone">', unsafe_allow_html=True)
-
     confirm = st.checkbox(
         "I understand this will permanently delete all data",
         key="danger_confirm"
@@ -241,4 +244,3 @@ with st.expander("Reset Options", expanded=False):
     else:
         st.caption("Check the box above to enable reset.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
