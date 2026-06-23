@@ -1,0 +1,7 @@
+# Live Stream Override — exposes Elasticsearch on localhost for the ql CLI.
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.live.yml up -d
+#        or: ./manage_stack.sh start-live
+services:
+  elasticsearch:
+    ports:
+      - "127.0.0.1:9200:9200"

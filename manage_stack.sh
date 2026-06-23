@@ -20,16 +20,19 @@ show_help() {
     echo "Usage: ./manage_stack.sh [command]"
     echo ""
     echo "Commands:"
-    echo "  start    - Start all services"
-    echo "  stop     - Stop all services"
-    echo "  restart  - Restart all services"
-    echo "  status   - Check service status"
-    echo "  logs     - View logs from all services"
-    echo "  rebuild  - Rebuild containers and restart"
+    echo "  start       - Start all services (ES internal-only)"
+    echo "  start-live  - Start with ES exposed on localhost:9200 + install ql CLI"
+    echo "  stop        - Stop all services"
+    echo "  restart     - Restart all services"
+    echo "  status      - Check service status"
+    echo "  logs        - View logs from all services"
+    echo "  rebuild     - Rebuild containers and restart"
+    echo "  install-cli - Install ql CLI to ~/.local/bin (on PATH)"
     echo ""
     echo "Services available at:"
     echo "  - Quick Log:   http://localhost:8501"
     echo "  - Kibana:      http://localhost:5601"
+    echo "  - ES (live):   http://localhost:9200  [start-live only]"
 }
 
 write_resource_status() {
@@ -111,6 +114,35 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
+install_cli() {
+    local SCRIPT="$PROJECT_DIR/ql"
+    local TARGET="$HOME/.local/bin/ql"
+
+    if [ ! -f "$SCRIPT" ]; then
+        echo "❌ ql not found at $SCRIPT"
+        exit 1
+    fi
+
+    chmod +x "$SCRIPT"
+    mkdir -p "$HOME/.local/bin"
+
+    if [ -L "$TARGET" ] || [ -f "$TARGET" ]; then
+        rm "$TARGET"
+    fi
+    ln -s "$SCRIPT" "$TARGET"
+
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*)
+            echo "✅ ql installed → $TARGET"
+            ;;
+        *)
+            echo "✅ ql installed → $TARGET"
+            echo "⚠️  ~/.local/bin is not on your PATH. Add this to your shell profile:"
+            echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
+            ;;
+    esac
+}
+
 case "$1" in
     start)
         echo "🚀 Starting Quick Log Stack..."
@@ -123,6 +155,24 @@ case "$1" in
         echo "🎉 Services are ready!"
         echo "   📊 Quick Log:   http://localhost:8501"
         echo "   🔍 Kibana:      http://localhost:5601"
+        ;;
+    start-live)
+        echo "🚀 Starting Quick Log Stack (Live Mode)..."
+        echo "   Elasticsearch will be exposed on localhost:9200"
+        write_resource_status
+        mkdir -p "$PROJECT_DIR/uploads"
+        cmd=$(printf "$COMPOSE_CMD" "-f docker-compose.yml -f docker-compose.live.yml up -d")
+        cd "$PROJECT_DIR" && eval "$cmd"
+        wait_for_healthy
+        echo ""
+        echo "🎉 Services are ready! (Live mode)"
+        echo "   📊 Quick Log:   http://localhost:8501"
+        echo "   🔍 Kibana:      http://localhost:5601"
+        echo "   🔗 Elasticsearch: http://localhost:9200"
+        echo ""
+        install_cli
+        echo ""
+        echo "   Try: myapp 2>&1 | ql stream --tag my-session"
         ;;
     stop)
         echo "🛑 Stopping Quick Log Stack..."
@@ -159,6 +209,9 @@ case "$1" in
         eval "$cmd_down" && eval "$cmd_build" && eval "$cmd_up"
         wait_for_healthy
         echo "✅ Containers rebuilt and restarted."
+        ;;
+    install-cli)
+        install_cli
         ;;
     *)
         show_help
