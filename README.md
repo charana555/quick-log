@@ -185,7 +185,7 @@ Commands:
 
 Application settings (upload directory, max file size) can be configured via the **Configuration Settings** page in the UI at http://localhost:8501.
 
-Settings are stored in `config/settings.json` (gitignored). A template is provided at `config/settings.template.json`.
+Settings are stored in `config/settings.json` (gitignored). On first run, it is created from `config/settings.template.json` if missing.
 
 ## Architecture
 
