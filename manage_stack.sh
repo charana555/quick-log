@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# Data Automation Stack Manager
-# Consolidated management for Streamlit app + ELK stack
+# Quick Log Stack Manager
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -16,22 +15,24 @@ else
 fi
 
 show_help() {
-    echo "Data Automation Stack Manager"
+    echo "Quick Log Stack Manager"
     echo ""
     echo "Usage: ./manage_stack.sh [command]"
     echo ""
     echo "Commands:"
-    echo "  start    - Start all services (ELK + Streamlit)"
-    echo "  stop     - Stop all services"
-    echo "  restart  - Restart all services"
-    echo "  status   - Check service status"
-    echo "  logs     - View logs from all services"
-    echo "  rebuild  - Rebuild containers and restart"
+    echo "  start       - Start all services (ES internal-only)"
+    echo "  start-live  - Start with ES exposed on localhost:9200 + install ql CLI"
+    echo "  stop        - Stop all services"
+    echo "  restart     - Restart all services"
+    echo "  status      - Check service status"
+    echo "  logs        - View logs from all services"
+    echo "  rebuild     - Rebuild containers and restart"
+    echo "  install-cli - Install ql CLI to ~/.local/bin (on PATH)"
     echo ""
     echo "Services available at:"
-    echo "  - Streamlit App: http://localhost:8501"
-    echo "  - Kibana:        http://localhost:5601"
-    echo "  - Elasticsearch: http://localhost:9200"
+    echo "  - Quick Log:   http://localhost:8501"
+    echo "  - Kibana:      http://localhost:5601"
+    echo "  - ES (live):   http://localhost:9200  [start-live only]"
 }
 
 write_resource_status() {
@@ -40,11 +41,9 @@ write_resource_status() {
     local DOCKER_VER="unknown"
     local SOURCE="unknown"
     
-    # Use 'colima list' for reliable memory/cpu detection (handles different output formats)
     if command -v colima &>/dev/null; then
         local LIST_LINE=$(colima list 2>/dev/null | grep -E "default|Running" | head -1)
         if [ -n "$LIST_LINE" ]; then
-            # Parse: PROFILE STATUS ARCH CPUS MEMORY DISK RUNTIME ADDRESS
             CPU_COUNT=$(echo "$LIST_LINE" | awk '{print $4}' | grep -oE '[0-9]+' || echo 0)
             MEM_GB=$(echo "$LIST_LINE" | awk '{print $5}' | grep -oE '[0-9]+' || echo 0)
             SOURCE="colima_list"
@@ -67,15 +66,14 @@ EOF
 }
 
 wait_for_healthy() {
-    echo "⏳ Waiting for services to become healthy (this may take 2-3 minutes)..."
+    echo "⏳ Waiting for services to become healthy..."
     local timeout=300
     local start_time=$(date +%s)
-    local EXPECTED_COUNT=4
+    local EXPECTED_COUNT=3
 
-    # Phase 1: Wait for containers to actually exist in docker ps
     echo -n "   Initializing containers"
     for i in {1..10}; do
-        local current_count=$(docker ps -a --filter name=quick-log --filter name=quick-log --format "{{.Names}}" | wc -l | tr -d ' ')
+        local current_count=$(docker ps -a --filter name=quick-log --format "{{.Names}}" | wc -l | tr -d ' ')
         if [ "$current_count" -ge "$EXPECTED_COUNT" ]; then
             break
         fi
@@ -84,7 +82,6 @@ wait_for_healthy() {
     done
     echo ""
 
-    # Phase 2: Wait for all to be running AND healthy
     while true; do
         local current_time=$(date +%s)
         local elapsed=$((current_time - start_time))
@@ -93,16 +90,15 @@ wait_for_healthy() {
             echo ""
             echo "❌ Timeout reached. Some services may not be healthy."
             echo "Current status:"
-            docker ps --filter name=quick-log --filter name=quick-log --format "table {{.Names}}\t{{.Status}}\t{{.State}}"
+            docker ps --filter name=quick-log --format "table {{.Names}}\t{{.Status}}\t{{.State}}"
             return 1
         fi
 
-        local running_count=$(docker ps --filter name=quick-log --filter name=quick-log --format "{{.State}}" | grep -c "running")
-        local healthy_count=$(docker ps --filter name=quick-log --filter name=quick-log --format "{{.Status}}" | grep -c "healthy")
-        local unhealthy_count=$(docker ps --filter name=quick-log --filter name=quick-log --format "{{.Status}}" | grep -c "unhealthy")
+        local running_count=$(docker ps --filter name=quick-log --format "{{.State}}" | grep -c "running")
+        local healthy_count=$(docker ps --filter name=quick-log --format "{{.Status}}" | grep -c "healthy")
+        local unhealthy_count=$(docker ps --filter name=quick-log --format "{{.Status}}" | grep -c "unhealthy")
 
-        # We need all 4 running, and at least 3 healthy (ES, Kibana, Stremlit have healthchecks, Logstash might take longer)
-        if [ "$running_count" -ge "$EXPECTED_COUNT" ] && [ "$healthy_count" -ge 3 ] && [ "$unhealthy_count" -eq 0 ]; then
+        if [ "$running_count" -ge "$EXPECTED_COUNT" ] && [ "$healthy_count" -ge 2 ] && [ "$unhealthy_count" -eq 0 ]; then
             echo ""
             echo "✅ All $running_count services are running and healthy!"
             return 0
@@ -118,32 +114,75 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
+install_cli() {
+    local SCRIPT="$PROJECT_DIR/ql"
+    local TARGET="$HOME/.local/bin/ql"
+
+    if [ ! -f "$SCRIPT" ]; then
+        echo "❌ ql not found at $SCRIPT"
+        exit 1
+    fi
+
+    chmod +x "$SCRIPT"
+    mkdir -p "$HOME/.local/bin"
+
+    if [ -L "$TARGET" ] || [ -f "$TARGET" ]; then
+        rm "$TARGET"
+    fi
+    ln -s "$SCRIPT" "$TARGET"
+
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*)
+            echo "✅ ql installed → $TARGET"
+            ;;
+        *)
+            echo "✅ ql installed → $TARGET"
+            echo "⚠️  ~/.local/bin is not on your PATH. Add this to your shell profile:"
+            echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
+            ;;
+    esac
+}
+
 case "$1" in
     start)
-        echo "🚀 Starting Data Automation Stack..."
+        echo "🚀 Starting Quick Log Stack..."
         write_resource_status
-        mkdir -p "$PROJECT_DIR/uploads/.tracking"
-        chmod 777 "$PROJECT_DIR/uploads/.tracking"
+        mkdir -p "$PROJECT_DIR/uploads"
         cmd=$(printf "$COMPOSE_CMD" "up -d")
         cd "$PROJECT_DIR" && eval "$cmd"
         wait_for_healthy
         echo ""
         echo "🎉 Services are ready!"
-        echo "   📊 Streamlit:   http://localhost:8501"
+        echo "   📊 Quick Log:   http://localhost:8501"
         echo "   🔍 Kibana:      http://localhost:5601"
-        echo "   🔌 Elastic:     http://localhost:9200"
+        ;;
+    start-live)
+        echo "🚀 Starting Quick Log Stack (Live Mode)..."
+        echo "   Elasticsearch will be exposed on localhost:9200"
+        write_resource_status
+        mkdir -p "$PROJECT_DIR/uploads"
+        cmd=$(printf "$COMPOSE_CMD" "-f docker-compose.yml -f docker-compose.live.yml up -d")
+        cd "$PROJECT_DIR" && eval "$cmd"
+        wait_for_healthy
+        echo ""
+        echo "🎉 Services are ready! (Live mode)"
+        echo "   📊 Quick Log:   http://localhost:8501"
+        echo "   🔍 Kibana:      http://localhost:5601"
+        echo "   🔗 Elasticsearch: http://localhost:9200"
+        echo ""
+        install_cli
+        echo ""
+        echo "   Try: myapp 2>&1 | ql stream --tag my-session"
         ;;
     stop)
-        echo "🛑 Stopping Data Automation Stack..."
+        echo "🛑 Stopping Quick Log Stack..."
         cmd=$(printf "$COMPOSE_CMD" "down")
         cd "$PROJECT_DIR" && eval "$cmd"
         echo "✅ Services stopped."
         ;;
     restart)
-        echo "🔄 Restarting Data Automation Stack..."
+        echo "🔄 Restarting Quick Log Stack..."
         write_resource_status
-        mkdir -p "$PROJECT_DIR/uploads/.tracking"
-        chmod 777 "$PROJECT_DIR/uploads/.tracking"
         cd "$PROJECT_DIR"
         cmd_down=$(printf "$COMPOSE_CMD" "down")
         cmd_up=$(printf "$COMPOSE_CMD" "up -d")
@@ -163,8 +202,6 @@ case "$1" in
     rebuild)
         echo "🏗️  Rebuilding containers..."
         write_resource_status
-        mkdir -p "$PROJECT_DIR/uploads/.tracking"
-        chmod 777 "$PROJECT_DIR/uploads/.tracking"
         cd "$PROJECT_DIR"
         cmd_down=$(printf "$COMPOSE_CMD" "down")
         cmd_build=$(printf "$COMPOSE_CMD" "build --no-cache")
@@ -172,6 +209,9 @@ case "$1" in
         eval "$cmd_down" && eval "$cmd_build" && eval "$cmd_up"
         wait_for_healthy
         echo "✅ Containers rebuilt and restarted."
+        ;;
+    install-cli)
+        install_cli
         ;;
     *)
         show_help

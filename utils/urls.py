@@ -1,7 +1,6 @@
 import os
 
 ELASTICSEARCH_INTERNAL = "http://elasticsearch:9200"
-LOGSTASH_INTERNAL = "http://logstash:9600"
 KIBANA_INTERNAL = "http://kibana:5601"
 
 

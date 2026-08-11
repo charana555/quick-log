@@ -159,6 +159,44 @@ h3 {
     font-family: var(--font-mono);
 }
 
+/* ── Sidebar logo ── */
+[data-testid="stSidebarUserContent"] {
+    padding-top: 0 !important;
+}
+[data-testid="stSidebarHeader"] {
+    margin-bottom: 0 !important;
+    gap: 8px !important;
+    text-align: center;
+}
+[data-testid="stLogoSpacer"] {
+    display: flex !important;
+    align-items: center !important;
+}
+[data-testid="stLogoSpacer"] {
+    display: block !important;
+    text-align: center;
+}
+[data-testid="stLogoSpacer"]::before {
+    content: "Quick Log";
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: #00D4AA;
+    display: block;
+}
+[data-testid="stLogoSpacer"]::after {
+    content: "LOG ANALYTICS";
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #7D8590;
+    letter-spacing: 1px;
+    display: block;
+}
+[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
 /* ── Danger zone ── */
 .danger-zone {
     border: 1px solid rgba(248, 81, 73, 0.2);

@@ -6,7 +6,6 @@ from utils.prerequisites import check_docker, check_colima_memory
 from utils.styles import inject_styles, check_service_health, render_status_dot
 from utils.urls import (
     ELASTICSEARCH_INTERNAL,
-    LOGSTASH_INTERNAL,
     KIBANA_INTERNAL,
     get_kibana_external,
 )
@@ -100,24 +99,23 @@ with tab_diagnostics:
     st.divider()
 
     st.subheader(":material/link: Service URLs")
-    st.caption("URLs are auto-derived from Docker service names and the `QUICK_LOG_HOST` environment variable.")
+    st.caption("Internal URLs use Docker service names. External Kibana URL uses the `QUICK_LOG_HOST` environment variable.")
 
     url_cols = st.columns(2)
     with url_cols[0]:
         st.markdown("**Internal (Docker network)**")
         st.code(f"Elasticsearch  {ELASTICSEARCH_INTERNAL}", language=None)
-        st.code(f"Logstash       {LOGSTASH_INTERNAL}", language=None)
         st.code(f"Kibana         {KIBANA_INTERNAL}", language=None)
     with url_cols[1]:
         st.markdown("**External (Browser)**")
         st.code(f"Kibana         {get_kibana_external()}", language=None)
-        st.caption("ES and Logstash are internal-only — not exposed outside Docker.")
+        st.caption("Elasticsearch is internal-only — not exposed outside Docker.")
 
     st.divider()
 
     st.subheader(":material/science: Connection Tests")
 
-    test_cols = st.columns(3)
+    test_cols = st.columns(2)
     with test_cols[0]:
         if st.button("Test Elasticsearch", key="test_es", use_container_width=True):
             import requests
@@ -131,15 +129,6 @@ with tab_diagnostics:
                 st.error(f":material/error: ES: {str(e)[:60]}")
 
     with test_cols[1]:
-        if st.button("Test Logstash", key="test_ls", use_container_width=True):
-            import requests
-            try:
-                r = requests.get(LOGSTASH_INTERNAL, timeout=5)
-                st.success(f":material/check_circle: Logstash: HTTP {r.status_code}")
-            except Exception as e:
-                st.error(f":material/error: Logstash: {str(e)[:60]}")
-
-    with test_cols[2]:
         if st.button("Test Kibana", key="test_kb", use_container_width=True):
             import requests
             try:

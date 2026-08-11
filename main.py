@@ -5,12 +5,16 @@ log_uploader = st.Page(
     "pages/log_uploader.py", title="Log Uploader", icon=":material/upload:", default=True
 )
 
+live_stream = st.Page(
+    "pages/live_stream.py", title="Live Stream", icon=":material/stream:"
+)
+
 configuration_settings = st.Page(
     "pages/settings.py", title="Configuration Settings", icon=":material/settings:"
 )
 
 nav_dict = {
-    "Quick Log": [log_uploader],
+    "Quick Log": [log_uploader, live_stream],
     "Settings": [configuration_settings]
 }
 
